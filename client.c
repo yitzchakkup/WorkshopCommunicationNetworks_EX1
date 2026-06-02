@@ -114,11 +114,14 @@ int main(int argc, char const *argv[]) {
     for (uint32_t size = 1; size <= 1024 * 1024; size *= 2) {
 
         // Warmup Phase
-        const uint32_t warmup_cycles = 1000;
+        const uint32_t warmup_cycles = 100;//100 as we checked a higher amount and results remained relitivly the same.
         run_warmup(sock, warmup_cycles, size);
 
         // Calculate dynamic batch size
-        const long long total_data_per_test = 256LL * 1024 * 1024; // 128MB
+        const long long total_data_per_test = 256LL * 1024 * 1024;
+        // 256MB Dynamic Batch Size: Scaled dynamically to maintain a consistent 32MB data payload per test.
+        // This ensures that smaller message sizes are sent frequently enough to average out microsecond-level timing
+        // noise (system calls and context switching) without causing infinite, slow execution times.
         uint32_t batch_size = (uint32_t)(total_data_per_test / size);
         if (batch_size < 10) batch_size = 10;
         if (batch_size > 200000) batch_size = 200000;
