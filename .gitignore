@@ -1,0 +1,13 @@
+# JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm, etc.)
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+cmake-build-*/
+
+# VS Code (just in case)
+.vscode/
+
+# Mac OS
+.DS_Store
