@@ -118,7 +118,7 @@ int main(int argc, char const *argv[]) {
         run_warmup(sock, warmup_cycles, size);
 
         // Calculate dynamic batch size
-        const long long total_data_per_test = 128LL * 1024 * 1024; // 128MB
+        const long long total_data_per_test = 512LL * 1024 * 1024; // 128MB
         uint32_t batch_size = (uint32_t)(total_data_per_test / size);
         if (batch_size < 10) batch_size = 10;
         if (batch_size > 200000) batch_size = 200000;
