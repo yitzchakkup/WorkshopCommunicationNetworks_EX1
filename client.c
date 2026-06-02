@@ -114,7 +114,7 @@ int main(int argc, char const *argv[]) {
     for (uint32_t size = 1; size <= 1024 * 1024; size *= 2) {
 
         // Warmup Phase
-        const uint32_t warmup_cycles = 100;
+        const uint32_t warmup_cycles = 1000;
         run_warmup(sock, warmup_cycles, size);
 
         // Calculate dynamic batch size
