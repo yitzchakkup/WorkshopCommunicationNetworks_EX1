@@ -47,6 +47,7 @@ int main(int argc, char* argv[]) {
 
     printf("Server listening on port %d...\n", port);
 
+    // OUTTER LOOP: Waits for new clients to connect
     while (1) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
@@ -59,67 +60,76 @@ int main(int argc, char* argv[]) {
 
         printf("\nClient connected.\n");
 
-        uint32_t header[2];
-        ssize_t bytes_read = 0;
-        size_t header_size = sizeof(header);
-        char *header_ptr = (char*)header;
+        // INNER LOOP: Stays connected and keeps reading batches until the client hangs up
+        while (1) {
+            uint32_t header[2];
+            ssize_t bytes_read = 0;
+            size_t header_size = sizeof(header);
+            char *header_ptr = (char*)header;
 
-        while (bytes_read < (ssize_t)header_size) {
-            ssize_t r = recv(client_fd, header_ptr + bytes_read, header_size - bytes_read, 0);
-            if (r <= 0) break;
-            bytes_read += r;
-        }
-
-        if (bytes_read != (ssize_t)header_size) {
-            fprintf(stderr, "Failed to read header from client. Closing connection.\n");
-            close(client_fd);
-            continue;
-        }
-
-        uint32_t num_messages = ntohl(header[0]);
-        uint32_t message_size = ntohl(header[1]);
-
-        printf("Expecting %u messages of size %u bytes.\n", num_messages, message_size);
-
-        char *buffer = (char*)malloc(message_size);
-        if (!buffer) {
-            fprintf(stderr, "Failed to allocate buffer\n");
-            close(client_fd);
-            continue;
-        }
-
-        int error = 0;
-        for (uint32_t i = 0; i < num_messages; ++i) {
-            size_t msg_bytes_read = 0;
-            while (msg_bytes_read < message_size) {
-                ssize_t r = recv(client_fd, buffer + msg_bytes_read, message_size - msg_bytes_read, 0);
-                if (r <= 0) { error = 1; break; }
-                msg_bytes_read += r;
+            // 1. Try to read the header
+            while (bytes_read < (ssize_t)header_size) {
+                ssize_t r = recv(client_fd, header_ptr + bytes_read, header_size - bytes_read, 0);
+                if (r <= 0) break;
+                bytes_read += r;
             }
-            if (error) break;
-        }
 
-        if (error) {
-            fprintf(stderr, "Error receiving messages or client disconnected early.\n");
+            // If we read exactly 0 bytes right at the start, the client intentionally closed the connection cleanly at the end of its loop.
+            if (bytes_read == 0) {
+                printf("Client finished benchmarking and disconnected.\n");
+                break; // Break the inner loop, go close the socket
+            }
+
+            // If it failed halfway through a header
+            if (bytes_read != (ssize_t)header_size) {
+                fprintf(stderr, "Failed to read header or connection dropped unexpectedly.\n");
+                break; // Break the inner loop, go close the socket
+            }
+
+            uint32_t num_messages = ntohl(header[0]);
+            uint32_t message_size = ntohl(header[1]);
+
+            char *buffer = (char*)malloc(message_size);
+            if (!buffer) {
+                fprintf(stderr, "Failed to allocate buffer\n");
+                break;
+            }
+
+            // 2. Read the actual messages
+            int error = 0;
+            for (uint32_t i = 0; i < num_messages; ++i) {
+                size_t msg_bytes_read = 0;
+                while (msg_bytes_read < message_size) {
+                    ssize_t r = recv(client_fd, buffer + msg_bytes_read, message_size - msg_bytes_read, 0);
+                    if (r <= 0) { error = 1; break; }
+                    msg_bytes_read += r;
+                }
+                if (error) break;
+            }
+
+            if (error) {
+                fprintf(stderr, "Error receiving messages mid-batch.\n");
+                free(buffer);
+                break; // Break the inner loop
+            }
+
+            // 3. Send the ACK
+            const char *ack_msg = "ACK";
+            // Note: Sending exactly 4 bytes including the null terminator because your client does recv(..., 4, ...)
+            ssize_t sent = send(client_fd, ack_msg, 4, 0);
+            if (sent < 0) {
+                fprintf(stderr, "Failed to send ACK.\n");
+                free(buffer);
+                break;
+            }
+
             free(buffer);
-            close(client_fd);
-            continue;
+            // The inner loop immediately repeats to read the next header from the same client!
         }
 
-        printf("Successfully received all %u messages.\n", num_messages);
-
-        const char *ack_msg = "ACK";
-        size_t ack_len = strlen(ack_msg);
-        ssize_t sent = send(client_fd, ack_msg, ack_len, 0);
-        if (sent != (ssize_t)ack_len) {
-            fprintf(stderr, "Failed to send ACK.\n");
-        } else {
-            printf("Sent ACK message to client.\n");
-        }
-
-        free(buffer);
+        // We only reach here when the inner loop breaks (client disconnected or error)
         close(client_fd);
-        printf("Connection closed.\n");
+        printf("Connection closed. Waiting for new client...\n");
     }
 
     close(server_fd);
