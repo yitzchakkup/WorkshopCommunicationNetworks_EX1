@@ -1,16 +1,13 @@
-#include <iostream>
-#include <vector>
-#include <string>
-#include <cstring>
+#define _POSIX_C_SOURCE 199309L
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include <unistd.h>
-#include <chrono>
-#include <cmath>
-#include <cstdint>
-#include <iomanip>
+#include <time.h>
 
-// Self-contained error-handling function
 void die(const char* message) {
     perror(message);
     exit(EXIT_FAILURE);
@@ -24,6 +21,7 @@ void send_warmup(const char* ip, int port, uint32_t count, uint32_t size) {
         die("Socket creation error");
     }
 
+    memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(port);
 
@@ -40,12 +38,14 @@ void send_warmup(const char* ip, int port, uint32_t count, uint32_t size) {
         die("Header send failed");
     }
 
-    std::vector<char> msg_buffer(size, 'a');
+    char *msg_buffer = (char*)malloc(size);
+    if (!msg_buffer) die("malloc failed");
+    memset(msg_buffer, 'a', size);
 
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t sent = 0;
         while (sent < size) {
-            int n = send(sock, msg_buffer.data() + sent, size - sent, 0);
+            ssize_t n = send(sock, msg_buffer + sent, size - sent, 0);
             if (n < 0) die("Message send failed");
             sent += n;
         }
@@ -56,36 +56,25 @@ void send_warmup(const char* ip, int port, uint32_t count, uint32_t size) {
         die("ACK receive failed");
     }
 
+    free(msg_buffer);
     close(sock);
 }
 
-
 int main(int argc, char const *argv[]) {
     if (argc != 3) {
-        std::cerr << "Usage: " << argv[0] << " <Server IP> <Server Port>\n";
+        fprintf(stderr, "Usage: %s <Server IP> <Server Port>\n", argv[0]);
         return -1;
     }
 
     const char* server_ip = argv[1];
-    int port = std::stoi(argv[2]);
+    int port = atoi(argv[2]);
 
-    std::cout << std::fixed << std::setprecision(2);
-
-    // Benchmark for message sizes from 1 byte up to 1MB
     for (uint32_t size = 1; size <= 1024 * 1024; size *= 2) {
-        // --- Warm-up Phase ---
-        // Perform 100 warm-up cycles to stabilize the TCP connection's congestion
-        // window and the system's buffers. This helps mitigate initial performance 
-        // fluctuations, ensuring representative steady-state performance.
         const uint32_t warmup_cycles = 100;
         send_warmup(server_ip, port, warmup_cycles, size);
 
-        // --- Measurement Phase ---
-        // Calculate a dynamic batch size 'X'. For smaller messages, we send a large
-        // number to average out per-packet overhead. For larger messages, we send 
-        // fewer to keep the test efficient.
-        const long long total_data_per_test = 32 * 1024 * 1024; // 32MB
-        uint32_t batch_size = total_data_per_test / size;
+        const long long total_data_per_test = 32LL * 1024 * 1024; // 32MB
+        uint32_t batch_size = (uint32_t)(total_data_per_test / size);
         if (batch_size < 10) batch_size = 10;
         if (batch_size > 200000) batch_size = 200000;
 
@@ -94,6 +83,7 @@ int main(int argc, char const *argv[]) {
         if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
             die("Socket creation error");
         }
+        memset(&serv_addr, 0, sizeof(serv_addr));
         serv_addr.sin_family = AF_INET;
         serv_addr.sin_port = htons(port);
         if (inet_pton(AF_INET, server_ip, &serv_addr.sin_addr) <= 0) {
@@ -108,39 +98,37 @@ int main(int argc, char const *argv[]) {
             die("Header send failed");
         }
 
-        std::vector<char> msg_buffer(size, 'a');
+        char *msg_buffer = (char*)malloc(size);
+        if (!msg_buffer) die("malloc failed");
+        memset(msg_buffer, 'a', size);
 
-        // Start the timer immediately after the warm-up cycles.
-        auto start = std::chrono::high_resolution_clock::now();
+        struct timespec start, end;
+        if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) die("clock_gettime");
 
-        // Send the batch of X messages.
         for (uint32_t i = 0; i < batch_size; ++i) {
             uint32_t sent = 0;
             while (sent < size) {
-                int n = send(sock, msg_buffer.data() + sent, size - sent, 0);
+                ssize_t n = send(sock, msg_buffer + sent, size - sent, 0);
                 if (n < 0) die("Message send failed");
                 sent += n;
             }
         }
 
-        // Wait to recv() the single acknowledgment from the server.
         char ack_buffer[4] = {0};
         if (recv(sock, ack_buffer, sizeof(ack_buffer), 0) < 0) {
             die("ACK receive failed");
         }
 
-        // Stop the timer. (The time waiting for the server's reply can be ignored in the calculation).
-        auto end = std::chrono::high_resolution_clock::now();
+        if (clock_gettime(CLOCK_MONOTONIC, &end) != 0) die("clock_gettime");
         close(sock);
 
-        std::chrono::duration<double> elapsed_seconds = end - start;
-        double total_megabytes = (static_cast<double>(batch_size) * size) / (1024.0 * 1024.0);
-        
-        // Calculate the throughput in Megabytes per second (MB/s).
-        double throughput_mbps = total_megabytes / elapsed_seconds.count();
+        double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+        double total_megabytes = ((double)batch_size * (double)size) / (1024.0 * 1024.0);
+        double throughput_mbps = total_megabytes / elapsed;
 
-        // Print the result strictly using this format: exactly three columns delimited by a single tab (\t).
-        std::cout << size << "\t" << throughput_mbps << "\tMB/s\n";
+        printf("%u\t%.2f\tMB/s\n", size, throughput_mbps);
+
+        free(msg_buffer);
     }
 
     return 0;
