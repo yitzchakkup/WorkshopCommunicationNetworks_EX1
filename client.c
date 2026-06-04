@@ -119,7 +119,7 @@ int main(int argc, char const *argv[]) {
 
         // Calculate dynamic batch size
         const long long total_data_per_test = 256LL * 1024 * 1024;
-        // 256MB Dynamic Batch Size: Scaled dynamically to maintain a consistent 32MB data payload per test.
+        // 256MB Dynamic Batch Size: Scaled dynamically to maintain a consistent 256MB data payload per test.
         // This ensures that smaller message sizes are sent frequently enough to average out microsecond-level timing
         // noise (system calls and context switching) without causing infinite, slow execution times.
         uint32_t batch_size = (uint32_t)(total_data_per_test / size);
